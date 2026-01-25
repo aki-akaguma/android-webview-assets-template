@@ -1,0 +1,38 @@
+package {{package_id}}
+
+import android.annotation.SuppressLint
+import android.os.Bundle
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
+import android.webkit.WebSettings
+import android.webkit.WebView
+import androidx.activity.ComponentActivity
+import androidx.webkit.WebViewAssetLoader
+import androidx.webkit.WebViewClientCompat
+
+class MainActivity : ComponentActivity() {
+    @SuppressLint("SetJavaScriptEnabled")
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContentView(R.layout.activity_main)
+        val myWebView: WebView = findViewById(R.id.webview)
+        //
+        val assetLoader = WebViewAssetLoader.Builder()
+            .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(this))
+            .addPathHandler("/res/", WebViewAssetLoader.ResourcesPathHandler(this))
+            .build()
+        myWebView.setWebViewClient(object : WebViewClientCompat() {
+            override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest): WebResourceResponse? {
+                return assetLoader.shouldInterceptRequest(request.url)
+            }
+        })
+        //
+        val webSettings: WebSettings = myWebView.settings
+        webSettings.javaScriptEnabled = true
+        webSettings.domStorageEnabled = true
+        webSettings.allowFileAccess = false
+        webSettings.allowContentAccess = false
+        //
+        myWebView.loadUrl("https://appassets.androidplatform.net/assets/index.html")
+    }
+}
