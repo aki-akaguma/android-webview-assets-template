@@ -1,9 +1,14 @@
 package {{package_id}}
 
+import android.Manifest
 import android.annotation.SuppressLint
 import android.app.DownloadManager
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.Environment
 import android.webkit.JavascriptInterface
@@ -18,6 +23,8 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import androidx.core.net.toUri
 import androidx.webkit.WebViewAssetLoader
 import androidx.webkit.WebViewClientCompat
@@ -27,6 +34,8 @@ import java.io.FileOutputStream
 import java.net.URLDecoder
 import java.util.regex.Pattern
 import kotlin.io.encoding.Base64
+
+const val NOTIFICATION_CHANNEL_ID = "{{package_id}}_channel_id"
 
 class MainActivity : ComponentActivity() {
     var filePathCallback: ValueCallback<Array<Uri>>? = null
@@ -40,6 +49,18 @@ class MainActivity : ComponentActivity() {
             }
             filePathCallback = null
         }
+    //
+    // Register a launcher to receive the results of Notification permission requests
+    private val requestNotificationPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { isGranted: Boolean ->
+        if (isGranted) {
+            // Show notification if permission is granted
+            processNotify()
+        }
+    }
+    private var notificationMessage = ""
+    private var notificationId = 1
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -63,6 +84,7 @@ class MainActivity : ComponentActivity() {
         webSettings.allowFileAccess = false
         webSettings.allowContentAccess = false
         //
+        // WebView settings
         myWebView.webChromeClient = object : WebChromeClient() {
             override fun onShowFileChooser(
                 webView: WebView?,
@@ -83,50 +105,139 @@ class MainActivity : ComponentActivity() {
         }
         myWebView.setDownloadListener { url, _, contentDisposition, mimeType, _ ->
             val fileName = URLUtil.guessFileName(url, contentDisposition, mimeType)
-            var msg: String
-            if (url.startsWith("blob:")) {
-                val js = javascriptToParseBlobData0(url, mimeType, fileName)
-                myWebView.loadUrl(js)
-                msg = "Download done"
-            } else if (url.startsWith("data:")) {
-                saveDataUri0(url, fileName)
-                msg = "Download done"
+            val isBlob = url.startsWith("blob:")
+            val isData = url.startsWith("data:")
+            if (isBlob || isData) {
+                val msg = "Download started"
+                Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
+                val js = javascriptToParseBlobData0(isBlob, url, mimeType, fileName)
+                myWebView.evaluateJavascript(js,null)
             } else {
+                /*
                 val request = saveWithDownloadManager0(url, mimeType, fileName)
                 val downloadManager = getSystemService(DOWNLOAD_SERVICE) as DownloadManager
                 downloadManager.enqueue(request)
-                msg = "Download started"
+                val msg = "Download started"
+                Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
+                */
+                processDownloadManager(url, mimeType, fileName)
             }
-            Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
         }
         class AndroidBridge {
             @Suppress("UNUSED_PARAMETER")
             @JavascriptInterface
-            fun onDownloadBlob(base64Data: String?, mimeType: String?, fileName: String) {
+            fun onDownloadBlob(base64Data: String?, mimeType: String, fileName: String) {
                 if (base64Data != null) {
-                    saveDataUri0(base64Data, fileName)
+                    notificationMessage = saveDataUri0(base64Data, fileName)
+                    processNotify()
                 }
             }
         }
         myWebView.addJavascriptInterface(AndroidBridge(), "AndroidBridge")
+
         //
-        myWebView.loadUrl("https://appassets.androidplatform.net/assets/pre.html")
+        myWebView.loadUrl("{{load_url}}")
+    }
+    private fun processDownloadManager(url: String, mimeType: String, fileName: String) {
+        val request = saveWithDownloadManager0(url, mimeType, fileName)
+        val downloadManager = getSystemService(DOWNLOAD_SERVICE) as DownloadManager
+        downloadManager.enqueue(request)
+        val msg = "Download started"
+        Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
+    }
+    private fun processNotify() {
+        // Check if you have permission (API 33+)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            !checkNotificationPermission()
+        ) {
+            // If you do not have permission, terminate the process.
+            return
+        }
+        //
+        val notificationManager: NotificationManager =
+            this.getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+
+        // Only after Android 8.0 (API26)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val name = "Download Done"
+            val importance = NotificationManager.IMPORTANCE_LOW
+            val channel = NotificationChannel(NOTIFICATION_CHANNEL_ID, name, importance).apply{
+                description = "File Download Done"
+            }
+            notificationManager.createNotificationChannel(channel)
+        }
+
+        // Create notification
+        val notification = NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.stat_sys_download_done)
+            .setContentTitle(notificationMessage)
+            .setContentText("Download Done")
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .build()
+
+        // Show notifications
+        notificationManager.notify(notificationId ++, notification)
+        notificationMessage = ""
+    }
+    private fun checkNotificationPermission(): Boolean {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            when {
+                // 2. Check if you already have permissions
+                ContextCompat.checkSelfPermission(
+                    this,
+                    Manifest.permission.POST_NOTIFICATIONS
+                ) == PackageManager.PERMISSION_GRANTED -> {
+                    return true
+                }
+                // 3. Display a dialog explicitly asking for permission
+                else -> {
+                    requestNotificationPermissionLauncher.launch(
+                        Manifest.permission.POST_NOTIFICATIONS
+                    )
+                }
+            }
+        } else {
+            // before Android 13
+            return true
+        }
+        return false
     }
 }
-private fun javascriptToParseBlobData0(url:String, mimeType:String, fileName:String): String {
+private fun javascriptToParseBlobData0(isBlob: Boolean, url:String, mimeType:String, fileName:String): String {
     // JavaScript to parse Blob data
-    val js = "javascript:var xhr=new XMLHttpRequest();" +
-            "xhr.open('GET','${url}',true);" +
-            "xhr.responseType='blob';" +
-            "xhr.onload=function(e){" +
-            "var reader=new FileReader();" +
-            "reader.readAsDataURL(this.response);" +
-            "reader.onloadend=function(){" +
-            "var base64data=reader.result;" +
-            "window.AndroidBridge.onDownloadBlob(base64data,'${mimeType}','${fileName}');" +
+    val js = "{" +
+            "let is_blob='${isBlob}';" +
+            "let url='${url}';" +
+            "let mmt='${mimeType}';" +
+            "let fnm='${fileName}';" +
+            "let elms=document.getElementsByTagName('a');" +
+            "let len=elms.length;" +
+            "for(let i=0; i<len; i++){" +
+            " let a=elms.item(i);" +
+            " if(a.href==url){" +
+            "  if(a.download && ''+a.download!='true'){" +
+            "   fnm=a.download;" +
+            "   break;" +
+            "  }" +
+            " }" +
             "}" +
-            "};" +
-            "xhr.send();"
+            "if(is_blob){" +
+            " let xhr=new XMLHttpRequest();" +
+            " xhr.open('GET',url,true);" +
+            " xhr.responseType='blob';" +
+            " xhr.onload=function(e){" +
+            "  let reader=new FileReader();" +
+            "  reader.readAsDataURL(this.response);" +
+            "  reader.onloadend=function(){" +
+            "   let base64data=reader.result;" +
+            "   window.AndroidBridge.onDownloadBlob(base64data,mmt,fnm);" +
+            "  };" +
+            " };" +
+            " xhr.send();" +
+            "}else{" +
+            " window.AndroidBridge.onDownloadBlob(url,mmt,fnm);" +
+            "}" +
+            "}"
     return js
 }
 private fun saveWithDownloadManager0(url: String, mimeType: String, fileName: String): DownloadManager.Request {
@@ -134,14 +245,16 @@ private fun saveWithDownloadManager0(url: String, mimeType: String, fileName: St
     request.apply {
         setTitle(fileName)
         setDescription("Downloading file...")
-        setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+        //setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+        setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE)
         setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName)
         setMimeType(mimeType)
     }
     return request
 }
-private fun saveDataUri0(url: String, filename: String) {
+private fun saveDataUri0(url: String, filename: String): String {
     val destinationFile = getUniqueDownloadFile0(filename)
+    val fnm = destinationFile.name
     //
     val pattern2 = Pattern.compile(";base64,")
     val matcher2 = pattern2.matcher(url)
@@ -160,6 +273,7 @@ private fun saveDataUri0(url: String, filename: String) {
         output.flush()
         output.close()
     }
+    return fnm
 }
 private fun getUniqueDownloadFile0(filename: String): File {
     //var destinationFile = File(filename)

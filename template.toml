@@ -2,9 +2,10 @@
 [variables]
 project_name = "myapp"
 app_name = "myapp"
-package_id = "com.example.aki.pp.myapp"
+package_id = "com.example.pp.myapp"
 version_code = "1"
 version_name = "0.1.0"
+load_url = "https://appassets.androidplatform.net/assets/pre.html"
 #load_url = "https://example.com/"
 #
 compile_sdk_version = "36"
